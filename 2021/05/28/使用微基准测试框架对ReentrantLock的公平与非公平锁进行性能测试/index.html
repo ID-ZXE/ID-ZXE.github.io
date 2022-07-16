@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=2">
+<meta name="theme-color" content="#222">
+<meta name="generator" content="Hexo 6.2.0">
+  <link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon-next.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/images/favicon-32x32-next.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/images/favicon-16x16-next.png">
+  <link rel="mask-icon" href="/images/logo.svg" color="#222">
+
+<link rel="stylesheet" href="/css/main.css">
+
+
+<link rel="stylesheet" href="/lib/font-awesome/css/all.min.css">
+
+<script id="hexo-configurations">
+    var NexT = window.NexT || {};
+    var CONFIG = {"hostname":"example.com","root":"/","scheme":"Muse","version":"7.8.0","exturl":false,"sidebar":{"position":"left","display":"post","padding":18,"offset":12,"onmobile":false},"copycode":{"enable":false,"show_result":false,"style":null},"back2top":{"enable":true,"sidebar":false,"scrollpercent":false},"bookmark":{"enable":false,"color":"#222","save":"auto"},"fancybox":false,"mediumzoom":false,"lazyload":false,"pangu":false,"comments":{"style":"tabs","active":null,"storage":true,"lazyload":false,"nav":null},"algolia":{"hits":{"per_page":10},"labels":{"input_placeholder":"Search for Posts","hits_empty":"We didn't find any results for the search: ${query}","hits_stats":"${hits} results found in ${time} ms"}},"localsearch":{"enable":false,"trigger":"auto","top_n_per_article":1,"unescape":false,"preload":false},"motion":{"enable":true,"async":false,"transition":{"post_block":"fadeIn","post_header":"slideDownIn","post_body":"slideDownIn","coll_header":"slideLeftIn","sidebar":"slideUpIn"}}};
+  </script>
+
+  <meta name="description" content="[toc]  前言最近在阅读ReentrantLock源码的时候, 发现了Lock有公平和不公平两种锁, 查阅相关资料与博客后得知公平锁和非公平锁的性能是不一样的, 非公平锁的性能会优于公平锁.因为FairLock在获取锁时, 永远是等待时间最长的线程获取到锁, 这样当线程释放锁以后, 如果还想继续再获取锁, 就必须去Sync队列尾部进行排队, 这样就会发生频繁的线程切换, 所以非公平锁的吞吐量就">
+<meta property="og:type" content="article">
+<meta property="og:title" content="使用微基准测试框架对ReentrantLock的公平与非公平锁进行性能测试">
+<meta property="og:url" content="http://example.com/2021/05/28/%E4%BD%BF%E7%94%A8%E5%BE%AE%E5%9F%BA%E5%87%86%E6%B5%8B%E8%AF%95%E6%A1%86%E6%9E%B6%E5%AF%B9ReentrantLock%E7%9A%84%E5%85%AC%E5%B9%B3%E4%B8%8E%E9%9D%9E%E5%85%AC%E5%B9%B3%E9%94%81%E8%BF%9B%E8%A1%8C%E6%80%A7%E8%83%BD%E6%B5%8B%E8%AF%95/index.html">
+<meta property="og:site_name" content="张小二的笔记本">
+<meta property="og:description" content="[toc]  前言最近在阅读ReentrantLock源码的时候, 发现了Lock有公平和不公平两种锁, 查阅相关资料与博客后得知公平锁和非公平锁的性能是不一样的, 非公平锁的性能会优于公平锁.因为FairLock在获取锁时, 永远是等待时间最长的线程获取到锁, 这样当线程释放锁以后, 如果还想继续再获取锁, 就必须去Sync队列尾部进行排队, 这样就会发生频繁的线程切换, 所以非公平锁的吞吐量就">
+<meta property="og:locale">
+<meta property="article:published_time" content="2021-05-28T03:37:21.000Z">
+<meta property="article:modified_time" content="2022-07-16T03:46:34.581Z">
+<meta property="article:author" content="张小二">
+<meta name="twitter:card" content="summary">
+
+<link rel="canonical" href="http://example.com/2021/05/28/%E4%BD%BF%E7%94%A8%E5%BE%AE%E5%9F%BA%E5%87%86%E6%B5%8B%E8%AF%95%E6%A1%86%E6%9E%B6%E5%AF%B9ReentrantLock%E7%9A%84%E5%85%AC%E5%B9%B3%E4%B8%8E%E9%9D%9E%E5%85%AC%E5%B9%B3%E9%94%81%E8%BF%9B%E8%A1%8C%E6%80%A7%E8%83%BD%E6%B5%8B%E8%AF%95/">
+
+
+<script id="page-configurations">
+  // https://hexo.io/docs/variables.html
+  CONFIG.page = {
+    sidebar: "",
+    isHome : false,
+    isPost : true,
+    lang   : 'zh-Hans'
+  };
+</script>
+
+  <title>使用微基准测试框架对ReentrantLock的公平与非公平锁进行性能测试 | 张小二的笔记本</title>
+  
+
+
+
+
+
+
+  <noscript>
+  <style>
+  .use-motion .brand,
+  .use-motion .menu-item,
+  .sidebar-inner,
+  .use-motion .post-block,
+  .use-motion .pagination,
+  .use-motion .comments,
+  .use-motion .post-header,
+  .use-motion .post-body,
+  .use-motion .collection-header { opacity: initial; }
+
+  .use-motion .site-title,
+  .use-motion .site-subtitle {
+    opacity: initial;
+    top: initial;
+  }
+
+  .use-motion .logo-line-before i { left: initial; }
+  .use-motion .logo-line-after i { right: initial; }
+  </style>
+</noscript>
+
+</head>
+
+<body itemscope itemtype="http://schema.org/WebPage">
+  <div class="container use-motion">
+    <div class="headband"></div>
+
+    <header class="header" itemscope itemtype="http://schema.org/WPHeader">
+      <div class="header-inner"><div class="site-brand-container">
+  <div class="site-nav-toggle">
+    <div class="toggle" aria-label="Toggle navigation bar">
+      <span class="toggle-line toggle-line-first"></span>
+      <span class="toggle-line toggle-line-middle"></span>
+      <span class="toggle-line toggle-line-last"></span>
+    </div>
+  </div>
+
+  <div class="site-meta">
+
+    <a href="/" class="brand" rel="start">
+      <span class="logo-line-before"><i></i></span>
+      <h1 class="site-title">张小二的笔记本</h1>
+      <span class="logo-line-after"><i></i></span>
+    </a>
+  </div>
+
+  <div class="site-nav-right">
+    <div class="toggle popup-trigger">
+    </div>
+  </div>
+</div>
+
+
+
+
+<nav class="site-nav">
+  <ul id="menu" class="main-menu menu">
+        <li class="menu-item menu-item-home">
+
+    <a href="/" rel="section"><i class="fa fa-home fa-fw"></i>Home</a>
+
+  </li>
+        <li class="menu-item menu-item-archives">
+
+    <a href="/archives/" rel="section"><i class="fa fa-archive fa-fw"></i>Archives</a>
+
+  </li>
+  </ul>
+</nav>
+
+
+
+
+</div>
+    </header>
+
+    
+  <div class="back-to-top">
+    <i class="fa fa-arrow-up"></i>
+    <span>0%</span>
+  </div>
+
+
+    <main class="main">
+      <div class="main-inner">
+        <div class="content-wrap">
+          
+
+          <div class="content post posts-expand">
+            
+
+    
+  
+  
+  <article itemscope itemtype="http://schema.org/Article" class="post-block" lang="zh-Hans">
+    <link itemprop="mainEntityOfPage" href="http://example.com/2021/05/28/%E4%BD%BF%E7%94%A8%E5%BE%AE%E5%9F%BA%E5%87%86%E6%B5%8B%E8%AF%95%E6%A1%86%E6%9E%B6%E5%AF%B9ReentrantLock%E7%9A%84%E5%85%AC%E5%B9%B3%E4%B8%8E%E9%9D%9E%E5%85%AC%E5%B9%B3%E9%94%81%E8%BF%9B%E8%A1%8C%E6%80%A7%E8%83%BD%E6%B5%8B%E8%AF%95/">
+
+    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
+      <meta itemprop="image" content="/images/avatar.gif">
+      <meta itemprop="name" content="张小二">
+      <meta itemprop="description" content="夏天这么热能把暗恋变成热恋嘛">
+    </span>
+
+    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
+      <meta itemprop="name" content="张小二的笔记本">
+    </span>
+      <header class="post-header">
+        <h1 class="post-title" itemprop="name headline">
+          使用微基准测试框架对ReentrantLock的公平与非公平锁进行性能测试
+        </h1>
+
+        <div class="post-meta">
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-calendar"></i>
+              </span>
+              <span class="post-meta-item-text">Posted on</span>
+
+              <time title="Created: 2021-05-28 11:37:21" itemprop="dateCreated datePublished" datetime="2021-05-28T11:37:21+08:00">2021-05-28</time>
+            </span>
+              <span class="post-meta-item">
+                <span class="post-meta-item-icon">
+                  <i class="far fa-calendar-check"></i>
+                </span>
+                <span class="post-meta-item-text">Edited on</span>
+                <time title="Modified: 2022-07-16 11:46:34" itemprop="dateModified" datetime="2022-07-16T11:46:34+08:00">2022-07-16</time>
+              </span>
+
+          
+
+        </div>
+      </header>
+
+    
+    
+    
+    <div class="post-body" itemprop="articleBody">
+
+      
+        <p>[toc]</p>
+<hr>
+<h1 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h1><p>最近在阅读ReentrantLock源码的时候, 发现了Lock有公平和不公平两种锁, 查阅相关资料与博客后得知公平锁和非公平锁的性能是不一样的, 非公平锁的性能会优于公平锁.<br>因为FairLock在获取锁时, 永远是等待时间最长的线程获取到锁, 这样当线程释放锁以后, 如果还想继续再获取锁, 就必须去Sync队列尾部进行排队, 这样就会发生频繁的线程切换, 所以非公平锁的吞吐量就要强于公平锁</p>
+<h1 id="Benchmark"><a href="#Benchmark" class="headerlink" title="Benchmark"></a>Benchmark</h1><p>是openjdk提供一种基准测试的框架, 支持多种粒度的性能测试. 官方文档: <a target="_blank" rel="noopener" href="https://github.com/openjdk/jmh">https://github.com/openjdk/jmh</a></p>
+<h2 id="maven依赖"><a href="#maven依赖" class="headerlink" title="maven依赖"></a>maven依赖</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line">&lt;!-- JMH--&gt;</span><br><span class="line">&lt;dependency&gt;</span><br><span class="line">    &lt;groupId&gt;org.openjdk.jmh&lt;/groupId&gt;</span><br><span class="line">    &lt;artifactId&gt;jmh-core&lt;/artifactId&gt;</span><br><span class="line">    &lt;version&gt;$&#123;jmh.version&#125;&lt;/version&gt;</span><br><span class="line">&lt;/dependency&gt;</span><br><span class="line">&lt;dependency&gt;</span><br><span class="line">    &lt;groupId&gt;org.openjdk.jmh&lt;/groupId&gt;</span><br><span class="line">    &lt;artifactId&gt;jmh-generator-annprocess&lt;/artifactId&gt;</span><br><span class="line">    &lt;version&gt;$&#123;jmh.version&#125;&lt;/version&gt;</span><br><span class="line">    &lt;scope&gt;provided&lt;/scope&gt;</span><br><span class="line">&lt;/dependency&gt;</span><br></pre></td></tr></table></figure>
+
+<h1 id="性能测试代码"><a href="#性能测试代码" class="headerlink" title="性能测试代码"></a>性能测试代码</h1><p>利用CountDownLatch配合JMH, 测试极端条件下(获取锁之后立马释放锁, 不断循环), 不同的线程数量循环10000次加锁解锁的平均时间  </p>
+<h2 id="代码地址"><a href="#代码地址" class="headerlink" title="代码地址"></a>代码地址</h2><p><a target="_blank" rel="noopener" href="https://github.com/plum-wine/code-commons/blob/master/api/src/main/java/com/github/thread/BenchmarkFairAndNonFair.java">https://github.com/plum-wine/code-commons/blob/master/api/src/main/java/com/github/thread/BenchmarkFairAndNonFair.java</a></p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br></pre></td><td class="code"><pre><span class="line">@Fork(1)</span><br><span class="line">@Threads(1)</span><br><span class="line">@Warmup(iterations = 1)</span><br><span class="line">@State(Scope.Benchmark)</span><br><span class="line">@BenchmarkMode(Mode.AverageTime)</span><br><span class="line">@OutputTimeUnit(TimeUnit.MILLISECONDS)</span><br><span class="line">@Measurement(iterations = 5, time = 5, timeUnit = TimeUnit.SECONDS)</span><br><span class="line">public class BenchmarkFairAndNonFair &#123;</span><br><span class="line"></span><br><span class="line">    @Param(&#123;&quot;10&quot;, &quot;50&quot;, &quot;100&quot;, &quot;300&quot;, &quot;500&quot;&#125;)</span><br><span class="line">    private int threadNum;</span><br><span class="line"></span><br><span class="line">    private static final int FOREACH_COUNT = 10000;</span><br><span class="line"></span><br><span class="line">    @Benchmark</span><br><span class="line">    public void testFairLock() throws InterruptedException &#123;</span><br><span class="line">        final Lock fairLock = new ReentrantLock(true);</span><br><span class="line">        final CountDownLatch countDownLatch = new CountDownLatch(threadNum);</span><br><span class="line">        List&lt;Thread&gt; threads = new ArrayList&lt;&gt;();</span><br><span class="line">        for (int i = 0; i &lt; threadNum; i++) &#123;</span><br><span class="line">            threads.add(new Thread(() -&gt; &#123;</span><br><span class="line">                for (int j = 0; j &lt; FOREACH_COUNT; j++) &#123;</span><br><span class="line">                    fairLock.lock();</span><br><span class="line">                    fairLock.unlock();</span><br><span class="line">                &#125;</span><br><span class="line">                countDownLatch.countDown();</span><br><span class="line">            &#125;));</span><br><span class="line">        &#125;</span><br><span class="line">        threads.forEach(thread -&gt; thread.start());</span><br><span class="line">        // main wait all thread</span><br><span class="line">        countDownLatch.await();</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    @Benchmark</span><br><span class="line">    public void testNonFairLock() throws InterruptedException &#123;</span><br><span class="line">        final Lock nonFairLock = new ReentrantLock(false);</span><br><span class="line">        final CountDownLatch countDownLatch = new CountDownLatch(threadNum);</span><br><span class="line">        List&lt;Thread&gt; threads = new ArrayList&lt;&gt;();</span><br><span class="line">        for (int i = 0; i &lt; threadNum; i++) &#123;</span><br><span class="line">            threads.add(new Thread(() -&gt; &#123;</span><br><span class="line">                for (int j = 0; j &lt; FOREACH_COUNT; j++) &#123;</span><br><span class="line">                    nonFairLock.lock();</span><br><span class="line">                    nonFairLock.unlock();</span><br><span class="line">                &#125;</span><br><span class="line">                countDownLatch.countDown();</span><br><span class="line">            &#125;));</span><br><span class="line">        &#125;</span><br><span class="line">        threads.forEach(thread -&gt; thread.start());</span><br><span class="line">        // main wait all thread</span><br><span class="line">        countDownLatch.await();</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    public static void main(String[] args) throws RunnerException &#123;</span><br><span class="line">        Options options = new OptionsBuilder()</span><br><span class="line">                .include(BenchmarkFairAndNonFair.class.getSimpleName())</span><br><span class="line">                .build();</span><br><span class="line">        new Runner(options).run();</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">&#125;</span><br><span class="line"></span><br></pre></td></tr></table></figure>
+
+<h1 id="性能测试结果"><a href="#性能测试结果" class="headerlink" title="性能测试结果"></a>性能测试结果</h1><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"># Run complete. Total time: 00:08:23</span><br><span class="line"></span><br><span class="line">Benchmark                                (threadNum)  Mode  Cnt      Score      Error  Units</span><br><span class="line">BenchmarkFairAndNonFair.testFairLock              10  avgt    5    335.780 ±   13.599  ms/op</span><br><span class="line">BenchmarkFairAndNonFair.testFairLock              50  avgt    5   1856.063 ±  127.977  ms/op</span><br><span class="line">BenchmarkFairAndNonFair.testFairLock             100  avgt    5   3917.435 ±  673.222  ms/op</span><br><span class="line">BenchmarkFairAndNonFair.testFairLock             300  avgt    5  14387.132 ± 3668.159  ms/op</span><br><span class="line">BenchmarkFairAndNonFair.testFairLock             500  avgt    5  29424.262 ± 2485.551  ms/op</span><br><span class="line">BenchmarkFairAndNonFair.testNonFairLock           10  avgt    5      2.383 ±    0.094  ms/op</span><br><span class="line">BenchmarkFairAndNonFair.testNonFairLock           50  avgt    5     11.402 ±    0.820  ms/op</span><br><span class="line">BenchmarkFairAndNonFair.testNonFairLock          100  avgt    5     23.525 ±    1.628  ms/op</span><br><span class="line">BenchmarkFairAndNonFair.testNonFairLock          300  avgt    5     70.299 ±    0.746  ms/op</span><br><span class="line">BenchmarkFairAndNonFair.testNonFairLock          500  avgt    5    121.046 ±    2.014  ms/op</span><br></pre></td></tr></table></figure>
+
+<h1 id="结论"><a href="#结论" class="headerlink" title="结论"></a>结论</h1><p>从测试结果可以可看出, 非公平锁的性能确实比公平锁要好, 而且线程数量越多, 差别越是明显</p>
+
+    </div>
+
+    
+    
+    
+
+      <footer class="post-footer">
+
+        
+
+
+        
+    <div class="post-nav">
+      <div class="post-nav-item">
+    <a href="/2021/04/19/%E7%BA%BF%E7%A8%8B%E6%B1%A0-ThreadPoolExecutor-%E5%8A%A0%E8%BD%BD%E4%BB%BB%E5%8A%A1%E7%9A%84%E6%B5%81%E7%A8%8B%E4%BB%A5%E5%8F%8A%E5%A4%8D%E7%94%A8%E7%BA%BF%E7%A8%8B%E7%9A%84%E5%8E%9F%E7%90%86/" rel="prev" title="线程池 ThreadPoolExecutor 加载任务的流程以及复用线程的原理">
+      <i class="fa fa-chevron-left"></i> 线程池 ThreadPoolExecutor 加载任务的流程以及复用线程的原理
+    </a></div>
+      <div class="post-nav-item">
+    <a href="/2021/07/02/%E5%88%A9%E7%94%A8JMeter%E5%AF%B9SpringBoot-%E5%90%8C%E6%AD%A5%E4%B8%8E%E5%BC%82%E6%AD%A5%E8%AF%B7%E6%B1%82%E8%BF%9B%E8%A1%8C%E5%8E%8B%E6%B5%8B/" rel="next" title="利用JMeter对SpringBoot 同步与异步请求进行压测">
+      利用JMeter对SpringBoot 同步与异步请求进行压测 <i class="fa fa-chevron-right"></i>
+    </a></div>
+    </div>
+      </footer>
+    
+  </article>
+  
+  
+  
+
+
+
+          </div>
+          
+
+<script>
+  window.addEventListener('tabs:register', () => {
+    let { activeClass } = CONFIG.comments;
+    if (CONFIG.comments.storage) {
+      activeClass = localStorage.getItem('comments_active') || activeClass;
+    }
+    if (activeClass) {
+      let activeTab = document.querySelector(`a[href="#comment-${activeClass}"]`);
+      if (activeTab) {
+        activeTab.click();
+      }
+    }
+  });
+  if (CONFIG.comments.storage) {
+    window.addEventListener('tabs:click', event => {
+      if (!event.target.matches('.tabs-comment .tab-content .tab-pane')) return;
+      let commentClass = event.target.classList[1];
+      localStorage.setItem('comments_active', commentClass);
+    });
+  }
+</script>
+
+        </div>
+          
+  
+  <div class="toggle sidebar-toggle">
+    <span class="toggle-line toggle-line-first"></span>
+    <span class="toggle-line toggle-line-middle"></span>
+    <span class="toggle-line toggle-line-last"></span>
+  </div>
+
+  <aside class="sidebar">
+    <div class="sidebar-inner">
+
+      <ul class="sidebar-nav motion-element">
+        <li class="sidebar-nav-toc">
+          Table of Contents
+        </li>
+        <li class="sidebar-nav-overview">
+          Overview
+        </li>
+      </ul>
+
+      <!--noindex-->
+      <div class="post-toc-wrap sidebar-panel">
+          <div class="post-toc motion-element"><ol class="nav"><li class="nav-item nav-level-1"><a class="nav-link" href="#%E5%89%8D%E8%A8%80"><span class="nav-number">1.</span> <span class="nav-text">前言</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#Benchmark"><span class="nav-number">2.</span> <span class="nav-text">Benchmark</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#maven%E4%BE%9D%E8%B5%96"><span class="nav-number">2.1.</span> <span class="nav-text">maven依赖</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#%E6%80%A7%E8%83%BD%E6%B5%8B%E8%AF%95%E4%BB%A3%E7%A0%81"><span class="nav-number">3.</span> <span class="nav-text">性能测试代码</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#%E4%BB%A3%E7%A0%81%E5%9C%B0%E5%9D%80"><span class="nav-number">3.1.</span> <span class="nav-text">代码地址</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#%E6%80%A7%E8%83%BD%E6%B5%8B%E8%AF%95%E7%BB%93%E6%9E%9C"><span class="nav-number">4.</span> <span class="nav-text">性能测试结果</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#%E7%BB%93%E8%AE%BA"><span class="nav-number">5.</span> <span class="nav-text">结论</span></a></li></ol></div>
+      </div>
+      <!--/noindex-->
+
+      <div class="site-overview-wrap sidebar-panel">
+        <div class="site-author motion-element" itemprop="author" itemscope itemtype="http://schema.org/Person">
+  <p class="site-author-name" itemprop="name">张小二</p>
+  <div class="site-description" itemprop="description">夏天这么热能把暗恋变成热恋嘛</div>
+</div>
+<div class="site-state-wrap motion-element">
+  <nav class="site-state">
+      <div class="site-state-item site-state-posts">
+          <a href="/archives/">
+        
+          <span class="site-state-item-count">12</span>
+          <span class="site-state-item-name">posts</span>
+        </a>
+      </div>
+  </nav>
+</div>
+
+
+
+      </div>
+
+    </div>
+  </aside>
+  <div id="sidebar-dimmer"></div>
+
+
+      </div>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-inner">
+        
+
+        
+
+<div class="copyright">
+  
+  &copy; 
+  <span itemprop="copyrightYear">2022</span>
+  <span class="with-love">
+    <i class="fa fa-heart"></i>
+  </span>
+  <span class="author" itemprop="copyrightHolder">张小二</span>
+</div>
+  <div class="powered-by">Powered by <a href="https://hexo.io/" class="theme-link" rel="noopener" target="_blank">Hexo</a> & <a href="https://muse.theme-next.org/" class="theme-link" rel="noopener" target="_blank">NexT.Muse</a>
+  </div>
+
+        
+
+
+
+
+
+
+
+
+      </div>
+    </footer>
+  </div>
+
+  
+  <script src="/lib/anime.min.js"></script>
+  <script src="/lib/velocity/velocity.min.js"></script>
+  <script src="/lib/velocity/velocity.ui.min.js"></script>
+
+<script src="/js/utils.js"></script>
+
+<script src="/js/motion.js"></script>
+
+
+<script src="/js/schemes/muse.js"></script>
+
+
+<script src="/js/next-boot.js"></script>
+
+
+
+
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+  
+
+</body>
+</html>

@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=2">
+<meta name="theme-color" content="#222">
+<meta name="generator" content="Hexo 6.2.0">
+  <link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon-next.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/images/favicon-32x32-next.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/images/favicon-16x16-next.png">
+  <link rel="mask-icon" href="/images/logo.svg" color="#222">
+
+<link rel="stylesheet" href="/css/main.css">
+
+
+<link rel="stylesheet" href="/lib/font-awesome/css/all.min.css">
+
+<script id="hexo-configurations">
+    var NexT = window.NexT || {};
+    var CONFIG = {"hostname":"example.com","root":"/","scheme":"Muse","version":"7.8.0","exturl":false,"sidebar":{"position":"left","display":"post","padding":18,"offset":12,"onmobile":false},"copycode":{"enable":false,"show_result":false,"style":null},"back2top":{"enable":true,"sidebar":false,"scrollpercent":false},"bookmark":{"enable":false,"color":"#222","save":"auto"},"fancybox":false,"mediumzoom":false,"lazyload":false,"pangu":false,"comments":{"style":"tabs","active":null,"storage":true,"lazyload":false,"nav":null},"algolia":{"hits":{"per_page":10},"labels":{"input_placeholder":"Search for Posts","hits_empty":"We didn't find any results for the search: ${query}","hits_stats":"${hits} results found in ${time} ms"}},"localsearch":{"enable":false,"trigger":"auto","top_n_per_article":1,"unescape":false,"preload":false},"motion":{"enable":true,"async":false,"transition":{"post_block":"fadeIn","post_header":"slideDownIn","post_body":"slideDownIn","coll_header":"slideLeftIn","sidebar":"slideUpIn"}}};
+  </script>
+
+  <meta name="description" content="[toc]  前言老生常谈的总结一下线程池的一些相关参数以及对应的处理逻辑, 总结线程池的相关原理 线程池参数以及任务处理流程使用线程池的好处 避免了反复创建销毁线程带来的开销, 统一管理 控制线程数量, 合理统筹计算资源(保持小的线程数量, 负载变大时才增加线程数量) 加快响应  线程池的参数 coreSize: 核心线程池数量 maxPoolSize: 最大线程池数量 keepAliveTim">
+<meta property="og:type" content="article">
+<meta property="og:title" content="线程池 ThreadPoolExecutor 加载任务的流程以及复用线程的原理">
+<meta property="og:url" content="http://example.com/2021/04/19/%E7%BA%BF%E7%A8%8B%E6%B1%A0-ThreadPoolExecutor-%E5%8A%A0%E8%BD%BD%E4%BB%BB%E5%8A%A1%E7%9A%84%E6%B5%81%E7%A8%8B%E4%BB%A5%E5%8F%8A%E5%A4%8D%E7%94%A8%E7%BA%BF%E7%A8%8B%E7%9A%84%E5%8E%9F%E7%90%86/index.html">
+<meta property="og:site_name" content="张小二的笔记本">
+<meta property="og:description" content="[toc]  前言老生常谈的总结一下线程池的一些相关参数以及对应的处理逻辑, 总结线程池的相关原理 线程池参数以及任务处理流程使用线程池的好处 避免了反复创建销毁线程带来的开销, 统一管理 控制线程数量, 合理统筹计算资源(保持小的线程数量, 负载变大时才增加线程数量) 加快响应  线程池的参数 coreSize: 核心线程池数量 maxPoolSize: 最大线程池数量 keepAliveTim">
+<meta property="og:locale">
+<meta property="article:published_time" content="2021-04-19T03:39:25.000Z">
+<meta property="article:modified_time" content="2022-07-16T03:46:19.179Z">
+<meta property="article:author" content="张小二">
+<meta name="twitter:card" content="summary">
+
+<link rel="canonical" href="http://example.com/2021/04/19/%E7%BA%BF%E7%A8%8B%E6%B1%A0-ThreadPoolExecutor-%E5%8A%A0%E8%BD%BD%E4%BB%BB%E5%8A%A1%E7%9A%84%E6%B5%81%E7%A8%8B%E4%BB%A5%E5%8F%8A%E5%A4%8D%E7%94%A8%E7%BA%BF%E7%A8%8B%E7%9A%84%E5%8E%9F%E7%90%86/">
+
+
+<script id="page-configurations">
+  // https://hexo.io/docs/variables.html
+  CONFIG.page = {
+    sidebar: "",
+    isHome : false,
+    isPost : true,
+    lang   : 'zh-Hans'
+  };
+</script>
+
+  <title>线程池 ThreadPoolExecutor 加载任务的流程以及复用线程的原理 | 张小二的笔记本</title>
+  
+
+
+
+
+
+
+  <noscript>
+  <style>
+  .use-motion .brand,
+  .use-motion .menu-item,
+  .sidebar-inner,
+  .use-motion .post-block,
+  .use-motion .pagination,
+  .use-motion .comments,
+  .use-motion .post-header,
+  .use-motion .post-body,
+  .use-motion .collection-header { opacity: initial; }
+
+  .use-motion .site-title,
+  .use-motion .site-subtitle {
+    opacity: initial;
+    top: initial;
+  }
+
+  .use-motion .logo-line-before i { left: initial; }
+  .use-motion .logo-line-after i { right: initial; }
+  </style>
+</noscript>
+
+</head>
+
+<body itemscope itemtype="http://schema.org/WebPage">
+  <div class="container use-motion">
+    <div class="headband"></div>
+
+    <header class="header" itemscope itemtype="http://schema.org/WPHeader">
+      <div class="header-inner"><div class="site-brand-container">
+  <div class="site-nav-toggle">
+    <div class="toggle" aria-label="Toggle navigation bar">
+      <span class="toggle-line toggle-line-first"></span>
+      <span class="toggle-line toggle-line-middle"></span>
+      <span class="toggle-line toggle-line-last"></span>
+    </div>
+  </div>
+
+  <div class="site-meta">
+
+    <a href="/" class="brand" rel="start">
+      <span class="logo-line-before"><i></i></span>
+      <h1 class="site-title">张小二的笔记本</h1>
+      <span class="logo-line-after"><i></i></span>
+    </a>
+  </div>
+
+  <div class="site-nav-right">
+    <div class="toggle popup-trigger">
+    </div>
+  </div>
+</div>
+
+
+
+
+<nav class="site-nav">
+  <ul id="menu" class="main-menu menu">
+        <li class="menu-item menu-item-home">
+
+    <a href="/" rel="section"><i class="fa fa-home fa-fw"></i>Home</a>
+
+  </li>
+        <li class="menu-item menu-item-archives">
+
+    <a href="/archives/" rel="section"><i class="fa fa-archive fa-fw"></i>Archives</a>
+
+  </li>
+  </ul>
+</nav>
+
+
+
+
+</div>
+    </header>
+
+    
+  <div class="back-to-top">
+    <i class="fa fa-arrow-up"></i>
+    <span>0%</span>
+  </div>
+
+
+    <main class="main">
+      <div class="main-inner">
+        <div class="content-wrap">
+          
+
+          <div class="content post posts-expand">
+            
+
+    
+  
+  
+  <article itemscope itemtype="http://schema.org/Article" class="post-block" lang="zh-Hans">
+    <link itemprop="mainEntityOfPage" href="http://example.com/2021/04/19/%E7%BA%BF%E7%A8%8B%E6%B1%A0-ThreadPoolExecutor-%E5%8A%A0%E8%BD%BD%E4%BB%BB%E5%8A%A1%E7%9A%84%E6%B5%81%E7%A8%8B%E4%BB%A5%E5%8F%8A%E5%A4%8D%E7%94%A8%E7%BA%BF%E7%A8%8B%E7%9A%84%E5%8E%9F%E7%90%86/">
+
+    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
+      <meta itemprop="image" content="/images/avatar.gif">
+      <meta itemprop="name" content="张小二">
+      <meta itemprop="description" content="夏天这么热能把暗恋变成热恋嘛">
+    </span>
+
+    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
+      <meta itemprop="name" content="张小二的笔记本">
+    </span>
+      <header class="post-header">
+        <h1 class="post-title" itemprop="name headline">
+          线程池 ThreadPoolExecutor 加载任务的流程以及复用线程的原理
+        </h1>
+
+        <div class="post-meta">
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-calendar"></i>
+              </span>
+              <span class="post-meta-item-text">Posted on</span>
+
+              <time title="Created: 2021-04-19 11:39:25" itemprop="dateCreated datePublished" datetime="2021-04-19T11:39:25+08:00">2021-04-19</time>
+            </span>
+              <span class="post-meta-item">
+                <span class="post-meta-item-icon">
+                  <i class="far fa-calendar-check"></i>
+                </span>
+                <span class="post-meta-item-text">Edited on</span>
+                <time title="Modified: 2022-07-16 11:46:19" itemprop="dateModified" datetime="2022-07-16T11:46:19+08:00">2022-07-16</time>
+              </span>
+
+          
+
+        </div>
+      </header>
+
+    
+    
+    
+    <div class="post-body" itemprop="articleBody">
+
+      
+        <p>[toc]</p>
+<hr>
+<h1 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h1><p>老生常谈的总结一下线程池的一些相关参数以及对应的处理逻辑, 总结线程池的相关原理</p>
+<h1 id="线程池参数以及任务处理流程"><a href="#线程池参数以及任务处理流程" class="headerlink" title="线程池参数以及任务处理流程"></a>线程池参数以及任务处理流程</h1><h2 id="使用线程池的好处"><a href="#使用线程池的好处" class="headerlink" title="使用线程池的好处"></a>使用线程池的好处</h2><ol>
+<li>避免了反复创建销毁线程带来的开销, 统一管理</li>
+<li>控制线程数量, 合理统筹计算资源(保持小的线程数量, 负载变大时才增加线程数量)</li>
+<li>加快响应</li>
+</ol>
+<h2 id="线程池的参数"><a href="#线程池的参数" class="headerlink" title="线程池的参数"></a>线程池的参数</h2><ol>
+<li>coreSize: 核心线程池数量</li>
+<li>maxPoolSize: 最大线程池数量</li>
+<li>keepAliveTime: 核心线程池之外的线程的存活时间</li>
+<li>timeUnit: 时间单位</li>
+<li>blockingQueue: 阻塞队列</li>
+<li>threadFactory: 线程池</li>
+<li>rejectHandler: 拒绝策略</li>
+</ol>
+<h2 id="任务处理流程"><a href="#任务处理流程" class="headerlink" title="任务处理流程"></a>任务处理流程</h2><ol>
+<li>首先检测线程池运行状态,如果不是RUNNING,则直接拒绝,线程池要保证在RUNNING的状态下执行任务.</li>
+<li>如果workerCount &lt; corePoolSize,则创建并启动一个线程来执行新提交的任务.</li>
+<li>如果workerCount &gt;&#x3D; corePoolSize,且线程池内的阻塞队列未满,则将任务添加到该阻塞队列中.</li>
+<li>如果workerCount &gt;&#x3D; corePoolSize &amp;&amp; workerCount &lt; maximumPoolSize,且线程池内的阻塞队列已满,则创建并启动一个线程来执行新提交的任务.</li>
+<li>如果workerCount &gt;&#x3D; maximumPoolSize,并且线程池内的阻塞队列已满,,则根据拒绝策略来处理该任务, 默认的处理方式是直接抛异常.</li>
+</ol>
+<h2 id="线程池的几种拒绝策略以及缓冲队列"><a href="#线程池的几种拒绝策略以及缓冲队列" class="headerlink" title="线程池的几种拒绝策略以及缓冲队列"></a>线程池的几种拒绝策略以及缓冲队列</h2><ul>
+<li>缓冲队列<ul>
+<li>ArrayBlockQueue: 数组实现的有界阻塞队列,先进先出</li>
+<li>LinkedBlockQueue: 链表实现的无界阻塞队列,默认长度Integer.MAX_VALUE</li>
+<li>PriorityBlockQueue: 支持优先级的无界队列,默认自然排序,可以实现compareTo方法</li>
+<li>DelayQueue: 延迟获取无界队列</li>
+<li>SychronousQueue: 不存储元素的队列</li>
+<li>LinkedBlockDeque: 由链表组成的双向队列,多线程并发时,可以将锁的竞争降低到一半</li>
+</ul>
+</li>
+<li>任务拒绝<ul>
+<li>AbortPolicy: 丢弃任务并抛出RejectExecutionException</li>
+<li>DiscardPolicy: 丢弃任务,不抛出异常. 适合无关紧要的任务</li>
+<li>DiscardOldPolicy: 丢弃队列最前面的任务,然后重新提交任务</li>
+<li>CallerRunPolicy: 由调用线程执行任务. 适合于必须让任务执行完的场景,多线程只是增加吞吐</li>
+</ul>
+</li>
+</ul>
+<h2 id="JDK自带的几种自动创建的线程池"><a href="#JDK自带的几种自动创建的线程池" class="headerlink" title="JDK自带的几种自动创建的线程池"></a>JDK自带的几种自动创建的线程池</h2><ol>
+<li>Executors.newFixedThreadPool();<ol>
+<li>LinkedBlockingQueue, 无界队列</li>
+<li>线程数量固定</li>
+</ol>
+</li>
+<li>Executors.newSingleThreadExecutor();<ol>
+<li>LinkedBlockingQueue, 无界队列</li>
+<li>线程数量只有一个</li>
+</ol>
+</li>
+<li>Executors.newCachedThreadExecutor();<ol>
+<li>SychronousQueue, 不存储元素, 直接交换的队列</li>
+<li>coreSize为0, maxPoolSize为Integer.MAX_VALUE</li>
+</ol>
+</li>
+<li>Executors.newScheduledThreadExecutor();<ol>
+<li>支持周期性任务</li>
+</ol>
+</li>
+</ol>
+<h1 id="线程数量的选择"><a href="#线程数量的选择" class="headerlink" title="线程数量的选择"></a>线程数量的选择</h1><ol>
+<li>Cpu密集型: 设置为Cpu核心数量的两倍</li>
+<li>耗时IO型: 设置为Cpu核心数的多倍, 比如10倍</li>
+<li>有一个计算公式: Cpu核心数*(1+平均等待时间&#x2F;平均工作时间)</li>
+<li>其实线程池数量的选择不能完全依赖上述的几点, 还需要结合机器资源进行压力测试, 那样才是最优的</li>
+</ol>
+<h1 id="与线程池的停止有关的几个方法"><a href="#与线程池的停止有关的几个方法" class="headerlink" title="与线程池的停止有关的几个方法"></a>与线程池的停止有关的几个方法</h1><ol>
+<li>shutdown<br> 并不一定会停止, 需要等待正在运行的任务执行完毕. 同时不再接收新的任务</li>
+<li>shutdownNow<br> 发出Interrupt信号, 停止提交了, 但是还没有运行的任务. 并返回还未开始执行的任务</li>
+<li>isShutdown<br> 判断线程池是否停止</li>
+<li>isTerminated<br> 当前线程池是否已经停止并且执行完了所有任务</li>
+<li>awaitTerminated(timeout, unit)<br> 线程池任务全部完毕之后返回true, 或者timeout之后返回false</li>
+</ol>
+<h1 id="线程池参数动态化"><a href="#线程池参数动态化" class="headerlink" title="线程池参数动态化"></a>线程池参数动态化</h1><ul>
+<li>参数动态化<ul>
+<li>JDK允许线程池使用方通过ThreadPoolExecutor的实例来动态设置线程池的核心策略，以setCorePoolSize为方法例，在运行期线程池使用方调用此方法设置corePoolSize之后，线程池会直接覆盖原来的corePoolSize值，并且基于当前值和原始值的比较结果采取不同的处理策略</li>
+<li>支持线程池参数动态调整、界面化操作；包括修改线程池核心大小、最大核心大小、队列长度等；参数修改后及时生效</li>
+</ul>
+</li>
+<li>线程池监控<ul>
+<li>用户基于JDK原生线程池ThreadPoolExecutor提供的几个public的getter方法，可以读取到当前线程池的运行状态以及参数</li>
+<li>线程池活跃度、任务的执行Transaction（频率、耗时）、Reject异常、线程池内部统计信息</li>
+<li>负载告警<ul>
+<li>线程池负载数达到一定阈值: activeCount&#x2F;maximumPoolSize</li>
+<li>线程池队列任务积压</li>
+<li>一个是发生了Reject异常,一个是队列中有等待任务</li>
+</ul>
+</li>
+<li>操作监控: 创建&#x2F;修改和删除线程池都会通知</li>
+</ul>
+</li>
+</ul>
+<h1 id="线程池是如何复用线程的"><a href="#线程池是如何复用线程的" class="headerlink" title="线程池是如何复用线程的"></a>线程池是如何复用线程的</h1><p>线程run方法中有一个while循环,如果是核心线程,会不断轮训.如果是非核心线程,会利用阻塞队列的poll超时返回机制,一旦超过就回收线程</p>
+<h1 id="线程池中的任务抛出异常后如何处理"><a href="#线程池中的任务抛出异常后如何处理" class="headerlink" title="线程池中的任务抛出异常后如何处理"></a>线程池中的任务抛出异常后如何处理</h1><p>抛出异常后,线程池会回收该线程,同时将工作线程数减一</p>
+<h1 id="线程池相关源码"><a href="#线程池相关源码" class="headerlink" title="线程池相关源码"></a>线程池相关源码</h1><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br><span class="line">88</span><br><span class="line">89</span><br><span class="line">90</span><br><span class="line">91</span><br><span class="line">92</span><br><span class="line">93</span><br><span class="line">94</span><br><span class="line">95</span><br><span class="line">96</span><br><span class="line">97</span><br><span class="line">98</span><br><span class="line">99</span><br><span class="line">100</span><br><span class="line">101</span><br><span class="line">102</span><br><span class="line">103</span><br><span class="line">104</span><br><span class="line">105</span><br><span class="line">106</span><br><span class="line">107</span><br><span class="line">108</span><br><span class="line">109</span><br><span class="line">110</span><br><span class="line">111</span><br><span class="line">112</span><br><span class="line">113</span><br><span class="line">114</span><br><span class="line">115</span><br><span class="line">116</span><br><span class="line">117</span><br><span class="line">118</span><br><span class="line">119</span><br><span class="line">120</span><br><span class="line">121</span><br><span class="line">122</span><br><span class="line">123</span><br><span class="line">124</span><br><span class="line">125</span><br><span class="line">126</span><br><span class="line">127</span><br><span class="line">128</span><br><span class="line">129</span><br><span class="line">130</span><br><span class="line">131</span><br><span class="line">132</span><br><span class="line">133</span><br><span class="line">134</span><br><span class="line">135</span><br><span class="line">136</span><br><span class="line">137</span><br><span class="line">138</span><br><span class="line">139</span><br><span class="line">140</span><br><span class="line">141</span><br><span class="line">142</span><br><span class="line">143</span><br><span class="line">144</span><br></pre></td><td class="code"><pre><span class="line">// AbstractExecutorService</span><br><span class="line">public Future&lt;?&gt; submit(Runnable task) &#123;</span><br><span class="line">    if (task == null) throw new NullPointerException();</span><br><span class="line">    // </span><br><span class="line">    RunnableFuture&lt;Void&gt; ftask = newTaskFor(task, null);</span><br><span class="line">    execute(ftask);</span><br><span class="line">    return ftask;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">// ThreadPoolService</span><br><span class="line">public void execute(Runnable command) &#123;</span><br><span class="line">    if (command == null)</span><br><span class="line">        throw new NullPointerException();</span><br><span class="line">    /*</span><br><span class="line">     * workerCountOf方法取出低29位的值，表示当前活动的线程数；</span><br><span class="line">     * 如果当前活动线程数小于corePoolSize，则新建一个线程放入线程池中；</span><br><span class="line">     * 并把任务添加到该线程中。</span><br><span class="line">     */</span><br><span class="line">    int c = ctl.get();</span><br><span class="line">    if (workerCountOf(c) &lt; corePoolSize) &#123;</span><br><span class="line">        if (addWorker(command, true))</span><br><span class="line">            return;</span><br><span class="line">        c = ctl.get();</span><br><span class="line">    &#125;</span><br><span class="line">    // 再次判断线程池的运行状态，如果不是运行状态，由于之前已经把command添加到workQueue中了，</span><br><span class="line">    // 这时需要移除该command</span><br><span class="line">    // 执行过后通过handler使用拒绝策略对该任务进行处理，整个方法返回</span><br><span class="line">    if (isRunning(c) &amp;&amp; workQueue.offer(command)) &#123;</span><br><span class="line">        int recheck = ctl.get();</span><br><span class="line">        if (! isRunning(recheck) &amp;&amp; remove(command))</span><br><span class="line">            reject(command);</span><br><span class="line">        </span><br><span class="line">        // 获取线程池中的有效线程数,如果数量是0,则执行addWorker方法</span><br><span class="line">        // 这里传入的参数表示:</span><br><span class="line">        // 1. 第一个参数为null,表示在线程池中创建一个线程,但不去启动.</span><br><span class="line">        // 2. 第二个参数为false,将线程池的有限线程数量的上限设置为maximumPoolSize,添加线程时根据maximumPoolSize来判断.</span><br><span class="line">        // 如果判断workerCount大于0,则直接返回,在workQueue中新增的command会在将来的某个时刻被执行.</span><br><span class="line">        else if (workerCountOf(recheck) == 0)</span><br><span class="line">            addWorker(null, false);</span><br><span class="line">    &#125;</span><br><span class="line">    </span><br><span class="line">    /*</span><br><span class="line">     * 如果执行到这里，有两种情况：</span><br><span class="line">     * 1. 线程池已经不是RUNNING状态；</span><br><span class="line">     * 2. 线程池是RUNNING状态，但workerCount &gt;= corePoolSize并且workQueue已满。</span><br><span class="line">     * 这时，再次调用addWorker方法，但第二个参数传入为false，将线程池的有限线程数量的上限设置为maximumPoolSize；</span><br><span class="line">     * 如果失败则拒绝该任务</span><br><span class="line">     */</span><br><span class="line">    else if (!addWorker(command, false))</span><br><span class="line">        reject(command);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">// 添加到执行队列</span><br><span class="line">// 当firstTask不为null时,表示提交到核心线程区域</span><br><span class="line">// 当firstTask为null时,表示提交到非核心区域</span><br><span class="line">private boolean addWorker(Runnable firstTask, boolean core) &#123;</span><br><span class="line">    retry:</span><br><span class="line">    for (;;) &#123;</span><br><span class="line">        // 利用一个AtomicInteger来保存两个状态</span><br><span class="line">        // 线程池运行状态,线程池任务数量</span><br><span class="line">        int c = ctl.get();</span><br><span class="line">        // 通过位运算获取</span><br><span class="line">        int rs = runStateOf(c);</span><br><span class="line">        </span><br><span class="line">        /*</span><br><span class="line">         * 这个if判断</span><br><span class="line">         * 如果rs &gt;= SHUTDOWN，则表示此时不再接收新任务；</span><br><span class="line">         * 接着判断以下3个条件，只要有1个不满足，则返回false：</span><br><span class="line">         * 1. rs == SHUTDOWN，这时表示关闭状态，不再接受新提交的任务，但却可以继续处理阻塞队列中已保存的任务</span><br><span class="line">         * 2. firsTask为空</span><br><span class="line">         * 3. 阻塞队列不为空</span><br><span class="line">         * </span><br><span class="line">         * 首先考虑rs == SHUTDOWN的情况</span><br><span class="line">         * 这种情况下不会接受新提交的任务，所以在firstTask不为空的时候会返回false；</span><br><span class="line">         * 然后，如果firstTask为空，并且workQueue也为空，则返回false，</span><br><span class="line">         * 因为队列中已经没有任务了，不需要再添加线程了</span><br><span class="line">         */</span><br><span class="line">        if (rs &gt;= SHUTDOWN &amp;&amp;</span><br><span class="line">            ! (rs == SHUTDOWN &amp;&amp;</span><br><span class="line">               firstTask == null &amp;&amp;</span><br><span class="line">               ! workQueue.isEmpty()))</span><br><span class="line">            return false;</span><br><span class="line"></span><br><span class="line">        for (;;) &#123;</span><br><span class="line">            int wc = workerCountOf(c);</span><br><span class="line">            if (wc &gt;= CAPACITY ||</span><br><span class="line">                wc &gt;= (core ? corePoolSize : maximumPoolSize))</span><br><span class="line">                return false;</span><br><span class="line">            if (compareAndIncrementWorkerCount(c))</span><br><span class="line">                break retry;</span><br><span class="line">            c = ctl.get();  // Re-read ctl</span><br><span class="line">            if (runStateOf(c) != rs)</span><br><span class="line">                continue retry;</span><br><span class="line">            // else CAS failed due to workerCount change; retry inner loop</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    boolean workerStarted = false;</span><br><span class="line">    boolean workerAdded = false;</span><br><span class="line">    Worker w = null;</span><br><span class="line">    try &#123;</span><br><span class="line">        // 完成线程初始化</span><br><span class="line">        w = new Worker(firstTask);</span><br><span class="line">        final Thread t = w.thread;</span><br><span class="line">        if (t != null) &#123;</span><br><span class="line">            // 这个习惯用法也与CPU缓存有关</span><br><span class="line">            // 从栈读变量比从堆读变量会更cache-friendly,本地变量最终绑定到CPU寄存器的可能性更高</span><br><span class="line">            // addWorker的时候需要加锁</span><br><span class="line">            final ReentrantLock mainLock = this.mainLock;</span><br><span class="line">            mainLock.lock();</span><br><span class="line">            try &#123;</span><br><span class="line">                // Recheck while holding lock.</span><br><span class="line">                // Back out on ThreadFactory failure or if</span><br><span class="line">                // shut down before lock acquired.</span><br><span class="line">                int rs = runStateOf(ctl.get());</span><br><span class="line"></span><br><span class="line">                // 线程池没有停止,或者当前任务是提交到非核心区域</span><br><span class="line">                if (rs &lt; SHUTDOWN ||</span><br><span class="line">                    (rs == SHUTDOWN &amp;&amp; firstTask == null)) &#123;</span><br><span class="line">                    if (t.isAlive()) // precheck that t is startable</span><br><span class="line">                        throw new IllegalThreadStateException();</span><br><span class="line">                    // 持有引用</span><br><span class="line">                    workers.add(w);</span><br><span class="line">                    int s = workers.size();</span><br><span class="line">                    // 更新最大数量</span><br><span class="line">                    if (s &gt; largestPoolSize)</span><br><span class="line">                        largestPoolSize = s;</span><br><span class="line">                    workerAdded = true;</span><br><span class="line">                &#125;</span><br><span class="line">            &#125; finally &#123;</span><br><span class="line">                mainLock.unlock();</span><br><span class="line">            &#125;</span><br><span class="line">            // 启动线程</span><br><span class="line">            if (workerAdded) &#123;</span><br><span class="line">                t.start();</span><br><span class="line">                workerStarted = true;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125; finally &#123;</span><br><span class="line">        if (! workerStarted)</span><br><span class="line">            addWorkerFailed(w);</span><br><span class="line">    &#125;</span><br><span class="line">    return workerStarted;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h1 id="Worker线程管理"><a href="#Worker线程管理" class="headerlink" title="Worker线程管理"></a>Worker线程管理</h1><p>Worker工作线程,实现了Runnable接口,并持有一个线程thread,一个初始化的任务firstTask.thread是在调用构造方法时通过ThreadFactory来创建的线程,可以用来执行任务;firstTask用它来保存传入的第一个任务,这个任务可以有也可以为null.如果这个值是非空的,那么线程就会在启动初期立即执行这个任务,也就对应核心线程创建时的情况;如果这个值是null,那么就需要创建一个线程去执行任务列表（workQueue）中的任务,也就是非核心线程的创建.</p>
+<h1 id="Worker源码"><a href="#Worker源码" class="headerlink" title="Worker源码"></a>Worker源码</h1><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br><span class="line">88</span><br><span class="line">89</span><br><span class="line">90</span><br><span class="line">91</span><br><span class="line">92</span><br><span class="line">93</span><br><span class="line">94</span><br><span class="line">95</span><br><span class="line">96</span><br><span class="line">97</span><br><span class="line">98</span><br><span class="line">99</span><br><span class="line">100</span><br><span class="line">101</span><br><span class="line">102</span><br><span class="line">103</span><br><span class="line">104</span><br><span class="line">105</span><br><span class="line">106</span><br><span class="line">107</span><br><span class="line">108</span><br><span class="line">109</span><br><span class="line">110</span><br><span class="line">111</span><br><span class="line">112</span><br><span class="line">113</span><br><span class="line">114</span><br><span class="line">115</span><br><span class="line">116</span><br><span class="line">117</span><br><span class="line">118</span><br><span class="line">119</span><br><span class="line">120</span><br><span class="line">121</span><br><span class="line">122</span><br><span class="line">123</span><br><span class="line">124</span><br><span class="line">125</span><br><span class="line">126</span><br><span class="line">127</span><br><span class="line">128</span><br><span class="line">129</span><br><span class="line">130</span><br><span class="line">131</span><br><span class="line">132</span><br><span class="line">133</span><br><span class="line">134</span><br><span class="line">135</span><br><span class="line">136</span><br><span class="line">137</span><br><span class="line">138</span><br><span class="line">139</span><br><span class="line">140</span><br><span class="line">141</span><br><span class="line">142</span><br><span class="line">143</span><br><span class="line">144</span><br><span class="line">145</span><br><span class="line">146</span><br><span class="line">147</span><br><span class="line">148</span><br><span class="line">149</span><br><span class="line">150</span><br><span class="line">151</span><br><span class="line">152</span><br><span class="line">153</span><br><span class="line">154</span><br><span class="line">155</span><br><span class="line">156</span><br><span class="line">157</span><br><span class="line">158</span><br><span class="line">159</span><br><span class="line">160</span><br><span class="line">161</span><br><span class="line">162</span><br><span class="line">163</span><br><span class="line">164</span><br><span class="line">165</span><br><span class="line">166</span><br><span class="line">167</span><br><span class="line">168</span><br><span class="line">169</span><br><span class="line">170</span><br><span class="line">171</span><br><span class="line">172</span><br><span class="line">173</span><br><span class="line">174</span><br><span class="line">175</span><br><span class="line">176</span><br><span class="line">177</span><br><span class="line">178</span><br><span class="line">179</span><br><span class="line">180</span><br><span class="line">181</span><br><span class="line">182</span><br><span class="line">183</span><br><span class="line">184</span><br><span class="line">185</span><br><span class="line">186</span><br><span class="line">187</span><br><span class="line">188</span><br><span class="line">189</span><br><span class="line">190</span><br><span class="line">191</span><br><span class="line">192</span><br><span class="line">193</span><br><span class="line">194</span><br><span class="line">195</span><br><span class="line">196</span><br><span class="line">197</span><br><span class="line">198</span><br><span class="line">199</span><br><span class="line">200</span><br><span class="line">201</span><br></pre></td><td class="code"><pre><span class="line">private final class Worker extends AbstractQueuedSynchronizer implements Runnable &#123;</span><br><span class="line">    /**</span><br><span class="line">     * This class will never be serialized, but we provide a</span><br><span class="line">     * serialVersionUID to suppress a javac warning.</span><br><span class="line">     */</span><br><span class="line">    private static final long serialVersionUID = 6138294804551838833L;</span><br><span class="line"></span><br><span class="line">    /** Thread this worker is running in.  Null if factory fails. */</span><br><span class="line">    final Thread thread;</span><br><span class="line">    /** Initial task to run.  Possibly null. */</span><br><span class="line">    Runnable firstTask;</span><br><span class="line">    /** Per-thread task counter */</span><br><span class="line">    volatile long completedTasks;</span><br><span class="line"></span><br><span class="line">    /**</span><br><span class="line">     * Creates with given first task and thread from ThreadFactory.</span><br><span class="line">     * @param firstTask the first task (null if none)</span><br><span class="line">     */</span><br><span class="line">    Worker(Runnable firstTask) &#123;</span><br><span class="line">        setState(-1); // inhibit interrupts until runWorker</span><br><span class="line">        this.firstTask = firstTask;</span><br><span class="line">        // 通过线程池创建thread,runnable参数就是this</span><br><span class="line">        this.thread = getThreadFactory().newThread(this);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    /** Delegates main run loop to outer runWorker  */</span><br><span class="line">    public void run() &#123;</span><br><span class="line">        runWorker(this);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    protected boolean isHeldExclusively() &#123;</span><br><span class="line">        return getState() != 0;</span><br><span class="line">    &#125;</span><br><span class="line">    // 借助aqs实现不可重入</span><br><span class="line">    protected boolean tryAcquire(int unused) &#123;</span><br><span class="line">        if (compareAndSetState(0, 1)) &#123;</span><br><span class="line">            setExclusiveOwnerThread(Thread.currentThread());</span><br><span class="line">            return true;</span><br><span class="line">        &#125;</span><br><span class="line">        return false;</span><br><span class="line">    &#125;</span><br><span class="line">    protected boolean tryRelease(int unused) &#123;</span><br><span class="line">        setExclusiveOwnerThread(null);</span><br><span class="line">        setState(0);</span><br><span class="line">        return true;</span><br><span class="line">    &#125;</span><br><span class="line">    public void lock()        &#123; acquire(1); &#125;</span><br><span class="line">    // tryLock可以知道当前线程是否有任务在执行</span><br><span class="line">    public boolean tryLock()  &#123; return tryAcquire(1); &#125;</span><br><span class="line">    public void unlock()      &#123; release(1); &#125;</span><br><span class="line">    public boolean isLocked() &#123; return isHeldExclusively(); &#125;</span><br><span class="line"></span><br><span class="line">    void interruptIfStarted() &#123;</span><br><span class="line">        Thread t;</span><br><span class="line">        if (getState() &gt;= 0 &amp;&amp; (t = thread) != null &amp;&amp; !t.isInterrupted()) &#123;</span><br><span class="line">            try &#123;</span><br><span class="line">                t.interrupt();</span><br><span class="line">            &#125; catch (SecurityException ignore) &#123;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">final void runWorker(Worker w) &#123;</span><br><span class="line">    Thread wt = Thread.currentThread();</span><br><span class="line">    Runnable task = w.firstTask;</span><br><span class="line">    w.firstTask = null;</span><br><span class="line">    w.unlock(); // allow interrupts</span><br><span class="line">    // 是否因为异常退出循环</span><br><span class="line">    boolean completedAbruptly = true;</span><br><span class="line">    try &#123;</span><br><span class="line">        // getTask()方法,不断轮询问</span><br><span class="line">        // getTask()返回null的时候,循环跳出</span><br><span class="line">        while (task != null || (task = getTask()) != null) &#123;</span><br><span class="line">            // 不可重入锁</span><br><span class="line">            w.lock();</span><br><span class="line">            // If pool is stopping, ensure thread is interrupted;</span><br><span class="line">            // if not, ensure thread is not interrupted.  This</span><br><span class="line">            // requires a recheck in second case to deal with</span><br><span class="line">            // shutdownNow race while clearing interrupt</span><br><span class="line">            if ((runStateAtLeast(ctl.get(), STOP) ||</span><br><span class="line">                 (Thread.interrupted() &amp;&amp;</span><br><span class="line">                  runStateAtLeast(ctl.get(), STOP))) &amp;&amp;</span><br><span class="line">                !wt.isInterrupted())</span><br><span class="line">                wt.interrupt();</span><br><span class="line">            try &#123;</span><br><span class="line">                beforeExecute(wt, task);</span><br><span class="line">                Throwable thrown = null;</span><br><span class="line">                try &#123;</span><br><span class="line">                    // 任务的执行</span><br><span class="line">                    task.run();</span><br><span class="line">                &#125; catch (RuntimeException x) &#123;</span><br><span class="line">                    thrown = x; throw x;</span><br><span class="line">                &#125; catch (Error x) &#123;</span><br><span class="line">                    thrown = x; throw x;</span><br><span class="line">                &#125; catch (Throwable x) &#123;</span><br><span class="line">                    thrown = x; throw new Error(x);</span><br><span class="line">                &#125; finally &#123;</span><br><span class="line">                    afterExecute(task, thrown);</span><br><span class="line">                &#125;</span><br><span class="line">            &#125; finally &#123;</span><br><span class="line">                task = null;</span><br><span class="line">                // 更新线程池完成任务的数量</span><br><span class="line">                w.completedTasks++;</span><br><span class="line">                w.unlock();</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">        completedAbruptly = false;</span><br><span class="line">    &#125; finally &#123;</span><br><span class="line">        // 回收线程</span><br><span class="line">        processWorkerExit(w, completedAbruptly);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">private Runnable getTask() &#123;</span><br><span class="line">    boolean timedOut = false; // Did the last poll() time out?</span><br><span class="line"></span><br><span class="line">    for (;;) &#123;</span><br><span class="line">        int c = ctl.get();</span><br><span class="line">        int rs = runStateOf(c);</span><br><span class="line"></span><br><span class="line">        /*</span><br><span class="line">         * 如果线程池状态rs &gt;= SHUTDOWN，也就是非RUNNING状态，再进行以下判断：</span><br><span class="line">         * 1. rs &gt;= STOP，线程池是否正在stop；</span><br><span class="line">         * 2. 阻塞队列是否为空。</span><br><span class="line">         * 如果以上条件满足，则将workerCount减1并返回null。</span><br><span class="line">         * 因为如果当前线程池状态的值是SHUTDOWN或以上时，不允许再向阻塞队列中添加任务。</span><br><span class="line">         */</span><br><span class="line">        if (rs &gt;= SHUTDOWN &amp;&amp; (rs &gt;= STOP || workQueue.isEmpty())) &#123;</span><br><span class="line">            decrementWorkerCount();</span><br><span class="line">            return null;</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        int wc = workerCountOf(c);</span><br><span class="line"></span><br><span class="line">        // timed变量用于判断是否需要进行超时控制。</span><br><span class="line">        // allowCoreThreadTimeOut默认是false，也就是核心线程不允许进行超时；</span><br><span class="line">        // wc &gt; corePoolSize，表示当前线程池中的线程数量大于核心线程数量；</span><br><span class="line">        // 对于超过核心线程数量的这些线程，需要进行超时控制</span><br><span class="line">        boolean timed = allowCoreThreadTimeOut || wc &gt; corePoolSize;</span><br><span class="line"></span><br><span class="line">        if ((wc &gt; maximumPoolSize || (timed &amp;&amp; timedOut))</span><br><span class="line">            &amp;&amp; (wc &gt; 1 || workQueue.isEmpty())) &#123;</span><br><span class="line">            if (compareAndDecrementWorkerCount(c))</span><br><span class="line">                return null;</span><br><span class="line">            continue;</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        try &#123;</span><br><span class="line">            /*</span><br><span class="line">             * 根据timed来判断，如果为true，则通过阻塞队列的poll方法进行超时控制，如果在keepAliveTime时间内没有获取到任务，则返回null；</span><br><span class="line">             * 否则通过take方法，如果这时队列为空，则take方法会阻塞直到队列不为空。</span><br><span class="line">             */</span><br><span class="line">            Runnable r = timed ?</span><br><span class="line">                workQueue.poll(keepAliveTime, TimeUnit.NANOSECONDS) :</span><br><span class="line">                workQueue.take();</span><br><span class="line">            if (r != null)</span><br><span class="line">                return r;</span><br><span class="line">            timedOut = true;</span><br><span class="line">        &#125; catch (InterruptedException retry) &#123;</span><br><span class="line">            timedOut = false;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">private void processWorkerExit(Worker w, boolean completedAbruptly) &#123;</span><br><span class="line">    // 如果completedAbruptly值为true,则说明线程执行时出现了异常,需要将workerCount减1.</span><br><span class="line">    // 如果线程执行时没有出现异常,说明在getTask()方法中已经已经对workerCount进行了减1操作,这里就不必再减了.  </span><br><span class="line">    if (completedAbruptly) // If abrupt, then workerCount wasn&#x27;t adjusted</span><br><span class="line">        decrementWorkerCount();</span><br><span class="line"></span><br><span class="line">    final ReentrantLock mainLock = this.mainLock;</span><br><span class="line">    mainLock.lock();</span><br><span class="line">    try &#123;</span><br><span class="line">        // 统计完成的任务数</span><br><span class="line">        completedTaskCount += w.completedTasks;</span><br><span class="line">        // 从workers中移除,也就表示着从线程池中移除了一个工作线程</span><br><span class="line">        // 同时失去对改线程的引用</span><br><span class="line">        workers.remove(w);</span><br><span class="line">    &#125; finally &#123;</span><br><span class="line">        mainLock.unlock();</span><br><span class="line">    &#125;</span><br><span class="line">    // 根据线程池状态进行判断是否结束线程池</span><br><span class="line">    tryTerminate();</span><br><span class="line">    int c = ctl.get();</span><br><span class="line">    /*</span><br><span class="line">     * 当线程池是RUNNING或SHUTDOWN状态时,如果worker是异常结束，那么会直接addWorker.</span><br><span class="line">     * 如果allowCoreThreadTimeOut=true,并且等待队列有任务，至少保留一个worker.</span><br><span class="line">     * 如果allowCoreThreadTimeOut=false,workerCount不少于corePoolSize.</span><br><span class="line">     */</span><br><span class="line">    if (runStateLessThan(c, STOP)) &#123;</span><br><span class="line">        if (!completedAbruptly) &#123;</span><br><span class="line">            int min = allowCoreThreadTimeOut ? 0 : corePoolSize;</span><br><span class="line">            if (min == 0 &amp;&amp; ! workQueue.isEmpty())</span><br><span class="line">                min = 1;</span><br><span class="line">            if (workerCountOf(c) &gt;= min)</span><br><span class="line">                return; // replacement not needed</span><br><span class="line">        &#125;</span><br><span class="line">        addWorker(null, false);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+    </div>
+
+    
+    
+    
+
+      <footer class="post-footer">
+
+        
+
+
+        
+    <div class="post-nav">
+      <div class="post-nav-item">
+    <a href="/2021/04/18/CountDownLatch%E4%B8%8EAQS%E5%85%B1%E4%BA%AB%E6%A8%A1%E5%BC%8F/" rel="prev" title="CountDownLatch与AQS共享模式">
+      <i class="fa fa-chevron-left"></i> CountDownLatch与AQS共享模式
+    </a></div>
+      <div class="post-nav-item">
+    <a href="/2021/05/28/%E4%BD%BF%E7%94%A8%E5%BE%AE%E5%9F%BA%E5%87%86%E6%B5%8B%E8%AF%95%E6%A1%86%E6%9E%B6%E5%AF%B9ReentrantLock%E7%9A%84%E5%85%AC%E5%B9%B3%E4%B8%8E%E9%9D%9E%E5%85%AC%E5%B9%B3%E9%94%81%E8%BF%9B%E8%A1%8C%E6%80%A7%E8%83%BD%E6%B5%8B%E8%AF%95/" rel="next" title="使用微基准测试框架对ReentrantLock的公平与非公平锁进行性能测试">
+      使用微基准测试框架对ReentrantLock的公平与非公平锁进行性能测试 <i class="fa fa-chevron-right"></i>
+    </a></div>
+    </div>
+      </footer>
+    
+  </article>
+  
+  
+  
+
+
+
+          </div>
+          
+
+<script>
+  window.addEventListener('tabs:register', () => {
+    let { activeClass } = CONFIG.comments;
+    if (CONFIG.comments.storage) {
+      activeClass = localStorage.getItem('comments_active') || activeClass;
+    }
+    if (activeClass) {
+      let activeTab = document.querySelector(`a[href="#comment-${activeClass}"]`);
+      if (activeTab) {
+        activeTab.click();
+      }
+    }
+  });
+  if (CONFIG.comments.storage) {
+    window.addEventListener('tabs:click', event => {
+      if (!event.target.matches('.tabs-comment .tab-content .tab-pane')) return;
+      let commentClass = event.target.classList[1];
+      localStorage.setItem('comments_active', commentClass);
+    });
+  }
+</script>
+
+        </div>
+          
+  
+  <div class="toggle sidebar-toggle">
+    <span class="toggle-line toggle-line-first"></span>
+    <span class="toggle-line toggle-line-middle"></span>
+    <span class="toggle-line toggle-line-last"></span>
+  </div>
+
+  <aside class="sidebar">
+    <div class="sidebar-inner">
+
+      <ul class="sidebar-nav motion-element">
+        <li class="sidebar-nav-toc">
+          Table of Contents
+        </li>
+        <li class="sidebar-nav-overview">
+          Overview
+        </li>
+      </ul>
+
+      <!--noindex-->
+      <div class="post-toc-wrap sidebar-panel">
+          <div class="post-toc motion-element"><ol class="nav"><li class="nav-item nav-level-1"><a class="nav-link" href="#%E5%89%8D%E8%A8%80"><span class="nav-number">1.</span> <span class="nav-text">前言</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#%E7%BA%BF%E7%A8%8B%E6%B1%A0%E5%8F%82%E6%95%B0%E4%BB%A5%E5%8F%8A%E4%BB%BB%E5%8A%A1%E5%A4%84%E7%90%86%E6%B5%81%E7%A8%8B"><span class="nav-number">2.</span> <span class="nav-text">线程池参数以及任务处理流程</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#%E4%BD%BF%E7%94%A8%E7%BA%BF%E7%A8%8B%E6%B1%A0%E7%9A%84%E5%A5%BD%E5%A4%84"><span class="nav-number">2.1.</span> <span class="nav-text">使用线程池的好处</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#%E7%BA%BF%E7%A8%8B%E6%B1%A0%E7%9A%84%E5%8F%82%E6%95%B0"><span class="nav-number">2.2.</span> <span class="nav-text">线程池的参数</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#%E4%BB%BB%E5%8A%A1%E5%A4%84%E7%90%86%E6%B5%81%E7%A8%8B"><span class="nav-number">2.3.</span> <span class="nav-text">任务处理流程</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#%E7%BA%BF%E7%A8%8B%E6%B1%A0%E7%9A%84%E5%87%A0%E7%A7%8D%E6%8B%92%E7%BB%9D%E7%AD%96%E7%95%A5%E4%BB%A5%E5%8F%8A%E7%BC%93%E5%86%B2%E9%98%9F%E5%88%97"><span class="nav-number">2.4.</span> <span class="nav-text">线程池的几种拒绝策略以及缓冲队列</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#JDK%E8%87%AA%E5%B8%A6%E7%9A%84%E5%87%A0%E7%A7%8D%E8%87%AA%E5%8A%A8%E5%88%9B%E5%BB%BA%E7%9A%84%E7%BA%BF%E7%A8%8B%E6%B1%A0"><span class="nav-number">2.5.</span> <span class="nav-text">JDK自带的几种自动创建的线程池</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#%E7%BA%BF%E7%A8%8B%E6%95%B0%E9%87%8F%E7%9A%84%E9%80%89%E6%8B%A9"><span class="nav-number">3.</span> <span class="nav-text">线程数量的选择</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#%E4%B8%8E%E7%BA%BF%E7%A8%8B%E6%B1%A0%E7%9A%84%E5%81%9C%E6%AD%A2%E6%9C%89%E5%85%B3%E7%9A%84%E5%87%A0%E4%B8%AA%E6%96%B9%E6%B3%95"><span class="nav-number">4.</span> <span class="nav-text">与线程池的停止有关的几个方法</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#%E7%BA%BF%E7%A8%8B%E6%B1%A0%E5%8F%82%E6%95%B0%E5%8A%A8%E6%80%81%E5%8C%96"><span class="nav-number">5.</span> <span class="nav-text">线程池参数动态化</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#%E7%BA%BF%E7%A8%8B%E6%B1%A0%E6%98%AF%E5%A6%82%E4%BD%95%E5%A4%8D%E7%94%A8%E7%BA%BF%E7%A8%8B%E7%9A%84"><span class="nav-number">6.</span> <span class="nav-text">线程池是如何复用线程的</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#%E7%BA%BF%E7%A8%8B%E6%B1%A0%E4%B8%AD%E7%9A%84%E4%BB%BB%E5%8A%A1%E6%8A%9B%E5%87%BA%E5%BC%82%E5%B8%B8%E5%90%8E%E5%A6%82%E4%BD%95%E5%A4%84%E7%90%86"><span class="nav-number">7.</span> <span class="nav-text">线程池中的任务抛出异常后如何处理</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#%E7%BA%BF%E7%A8%8B%E6%B1%A0%E7%9B%B8%E5%85%B3%E6%BA%90%E7%A0%81"><span class="nav-number">8.</span> <span class="nav-text">线程池相关源码</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#Worker%E7%BA%BF%E7%A8%8B%E7%AE%A1%E7%90%86"><span class="nav-number">9.</span> <span class="nav-text">Worker线程管理</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#Worker%E6%BA%90%E7%A0%81"><span class="nav-number">10.</span> <span class="nav-text">Worker源码</span></a></li></ol></div>
+      </div>
+      <!--/noindex-->
+
+      <div class="site-overview-wrap sidebar-panel">
+        <div class="site-author motion-element" itemprop="author" itemscope itemtype="http://schema.org/Person">
+  <p class="site-author-name" itemprop="name">张小二</p>
+  <div class="site-description" itemprop="description">夏天这么热能把暗恋变成热恋嘛</div>
+</div>
+<div class="site-state-wrap motion-element">
+  <nav class="site-state">
+      <div class="site-state-item site-state-posts">
+          <a href="/archives/">
+        
+          <span class="site-state-item-count">12</span>
+          <span class="site-state-item-name">posts</span>
+        </a>
+      </div>
+  </nav>
+</div>
+
+
+
+      </div>
+
+    </div>
+  </aside>
+  <div id="sidebar-dimmer"></div>
+
+
+      </div>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-inner">
+        
+
+        
+
+<div class="copyright">
+  
+  &copy; 
+  <span itemprop="copyrightYear">2022</span>
+  <span class="with-love">
+    <i class="fa fa-heart"></i>
+  </span>
+  <span class="author" itemprop="copyrightHolder">张小二</span>
+</div>
+  <div class="powered-by">Powered by <a href="https://hexo.io/" class="theme-link" rel="noopener" target="_blank">Hexo</a> & <a href="https://muse.theme-next.org/" class="theme-link" rel="noopener" target="_blank">NexT.Muse</a>
+  </div>
+
+        
+
+
+
+
+
+
+
+
+      </div>
+    </footer>
+  </div>
+
+  
+  <script src="/lib/anime.min.js"></script>
+  <script src="/lib/velocity/velocity.min.js"></script>
+  <script src="/lib/velocity/velocity.ui.min.js"></script>
+
+<script src="/js/utils.js"></script>
+
+<script src="/js/motion.js"></script>
+
+
+<script src="/js/schemes/muse.js"></script>
+
+
+<script src="/js/next-boot.js"></script>
+
+
+
+
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+  
+
+</body>
+</html>
